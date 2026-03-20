@@ -13,7 +13,7 @@ interface PDFDocument {
   getPage: (num: number) => Promise<any>
 }
 
-type Tool = 'select' | 'highlight' | 'rectangle' | 'text' | 'pen' | 'erase'
+type Tool = 'select' | 'highlight' | 'rectangle' | 'text' | 'pen' | 'image' | 'erase'
 
 type AnnotationBase = {
   id: string
@@ -52,6 +52,13 @@ type Annotation = (AnnotationBase & {
   points: Array<{ x: number; y: number }>
   color: string
   strokeWidth: number
+}) | (AnnotationBase & {
+  type: 'image'
+  x: number
+  y: number
+  width: number
+  height: number
+  dataUrl: string
 })
 
 function App() {
@@ -73,6 +80,8 @@ function App() {
   const [textSize, setTextSize] = useState(20)
   const [penColor, setPenColor] = useState('#16a34a')
   const [penSize, setPenSize] = useState(3)
+  const [pendingImageDataUrl, setPendingImageDataUrl] = useState<string | null>(null)
+  const [pendingImageName, setPendingImageName] = useState('')
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
@@ -101,6 +110,27 @@ function App() {
       alert('Failed to load PDF')
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : null
+        if (!result) return
+        setPendingImageDataUrl(result)
+        setPendingImageName(file.name)
+        setTool('image')
+      }
+      reader.readAsDataURL(file)
+    } catch (err) {
+      console.error('Error loading image:', err)
+      alert('圖片載入失敗')
+    } finally {
+      e.target.value = ''
     }
   }
 
@@ -253,6 +283,32 @@ function App() {
         color: textColor,
         fontSize: textSize
       }])
+      return
+    }
+
+    if (tool === 'image') {
+      if (!pendingImageDataUrl) {
+        alert('請先在工具列上傳一張圖片')
+        return
+      }
+      const image = new Image()
+      image.onload = () => {
+        const maxWidth = canvasRef.current ? canvasRef.current.width * 0.35 : 260
+        const ratio = image.width / image.height || 1
+        const width = Math.min(maxWidth, image.width)
+        const height = width / ratio
+        setAnnotations(prev => [...prev, {
+          id: makeId(),
+          type: 'image',
+          page: currentPage,
+          x: point.x,
+          y: point.y,
+          width,
+          height,
+          dataUrl: pendingImageDataUrl
+        }])
+      }
+      image.src = pendingImageDataUrl
       return
     }
 
@@ -450,6 +506,22 @@ function App() {
           }
         }
 
+        if (ann.type === 'image') {
+          const x = ann.x * scaleX
+          const y = pageHeight - (ann.y + ann.height) * scaleY
+          const width = ann.width * scaleX
+          const height = ann.height * scaleY
+          try {
+            const bytes = dataUrlToUint8Array(ann.dataUrl)
+            const image = ann.dataUrl.includes('image/jpeg') || ann.dataUrl.includes('image/jpg')
+              ? await pdf.embedJpg(bytes)
+              : await pdf.embedPng(bytes)
+            page.drawImage(image, { x, y, width, height })
+          } catch (imageErr) {
+            console.error('Image embed failed:', imageErr)
+          }
+        }
+
         if (ann.type === 'pen') {
           const c = hexToRgb(ann.color)
           for (let i = 1; i < ann.points.length; i++) {
@@ -555,6 +627,12 @@ function App() {
                 ✍️ Handwrite
               </button>
               <button
+                onClick={() => setTool('image')}
+                className={`px-3 py-1.5 rounded ${tool === 'image' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100'}`}
+              >
+                🖼️ Image
+              </button>
+              <button
                 onClick={() => setTool('erase')}
                 className={`px-3 py-1.5 rounded ${tool === 'erase' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100'}`}
               >
@@ -578,6 +656,16 @@ function App() {
                   <span className="w-10 text-gray-600">{penSize}px</span>
                 </div>
               )}
+
+              {tool === 'image' && (
+                <div className="ml-2 flex items-center gap-2 text-sm">
+                  <label className="cursor-pointer bg-purple-600 text-white px-3 py-1.5 rounded hover:bg-purple-700">
+                    <input type="file" accept="image/png,image/jpeg,image/jpg" onChange={handleImageUpload} className="hidden" />
+                    上傳圖片
+                  </label>
+                  <span className="text-gray-500 max-w-36 truncate">{pendingImageName || '尚未選擇圖片'}</span>
+                </div>
+              )}
               
               <button
                 onClick={clearAnnotations}
@@ -587,6 +675,7 @@ function App() {
               </button>
               {tool === 'erase' && <span className="text-sm text-orange-600">點選標註即可刪除</span>}
               {tool === 'select' && <span className="text-sm text-blue-600">文字可拖曳，點選文字可在右側面板編輯</span>}
+              {tool === 'image' && <span className="text-sm text-purple-600">先上傳圖片，再點 PDF 放置</span>}
             </div>
 
             <div className="flex items-center gap-4">
@@ -716,6 +805,26 @@ function App() {
                       >
                         {ann.text}
                       </div>
+                    )
+                  }
+
+                  if (ann.type === 'image') {
+                    return (
+                      <img
+                        key={ann.id}
+                        src={ann.dataUrl}
+                        alt="annotation"
+                        onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
+                        style={{
+                          position: 'absolute',
+                          left: ann.x,
+                          top: ann.y,
+                          width: ann.width,
+                          height: ann.height,
+                          objectFit: 'contain',
+                          pointerEvents: tool === 'erase' ? 'auto' : 'none'
+                        }}
+                      />
                     )
                   }
 
