@@ -28,6 +28,12 @@ interface DragState {
   offsetY: number
 }
 
+interface DragPreview {
+  id: string
+  x: number
+  y: number
+}
+
 type Annotation = (AnnotationBase & {
   type: 'highlight' | 'rectangle'
   x: number
@@ -68,6 +74,7 @@ function App() {
   const [penColor, setPenColor] = useState('#16a34a')
   const [penSize, setPenSize] = useState(3)
   const [dragState, setDragState] = useState<DragState | null>(null)
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -177,6 +184,7 @@ function App() {
       offsetX: e.clientX - rect.left - x,
       offsetY: e.clientY - rect.top - y
     })
+    setDragPreview({ id, x, y })
   }
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -221,7 +229,7 @@ function App() {
     if (dragState) {
       const x = e.clientX - rect.left - dragState.offsetX
       const y = e.clientY - rect.top - dragState.offsetY
-      setAnnotations(prev => prev.map(a => (a.id === dragState.id && a.type === 'text') ? { ...a, x, y } : a))
+      setDragPreview({ id: dragState.id, x, y })
       return
     }
 
@@ -235,7 +243,14 @@ function App() {
 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (dragState) {
+      if (dragPreview?.id === dragState.id) {
+        setAnnotations(prev => prev.map(a => (a.id === dragState.id && a.type === 'text')
+          ? { ...a, x: dragPreview.x, y: dragPreview.y }
+          : a
+        ))
+      }
       setDragState(null)
+      setDragPreview(null)
       return
     }
 
@@ -635,16 +650,20 @@ function App() {
                   }
 
                   if (ann.type === 'text') {
+                    const previewing = dragPreview?.id === ann.id
+                    const drawX = previewing ? dragPreview.x : ann.x
+                    const drawY = previewing ? dragPreview.y : ann.y
+
                     return (
                       <div
                         key={ann.id}
                         className="absolute font-semibold whitespace-pre-wrap select-none"
-                        onMouseDown={(e) => startTextDrag(e, ann.id, ann.x, ann.y)}
+                        onMouseDown={(e) => startTextDrag(e, ann.id, drawX, drawY)}
                         onDoubleClick={() => tool === 'select' && handleEditAnnotation(ann.id)}
                         onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
                         style={{
-                          left: ann.x,
-                          top: ann.y,
+                          left: drawX,
+                          top: drawY,
                           maxWidth: '280px',
                           color: ann.color,
                           fontSize: `${ann.fontSize}px`,
