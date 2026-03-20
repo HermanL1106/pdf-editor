@@ -137,7 +137,7 @@ function App() {
       if (a.type === 'text') {
         const text = window.prompt('編輯文字內容：', a.text)
         if (text === null) return a
-        const color = window.prompt('文字顏色（hex）', a.color) || a.color
+        const color = normalizeHexColor(window.prompt('文字顏色（hex）', a.color) || a.color)
         const size = Number(window.prompt('字體大小(px)', String(a.fontSize)) || a.fontSize)
         return { ...a, text: text.trim() || a.text, color, fontSize: Number.isFinite(size) ? size : a.fontSize }
       }
@@ -157,7 +157,7 @@ function App() {
       }
 
       if (a.type === 'pen') {
-        const color = window.prompt('筆色（hex）', a.color) || a.color
+        const color = normalizeHexColor(window.prompt('筆色（hex）', a.color) || a.color)
         const strokeWidth = Number(window.prompt('粗細(px)', String(a.strokeWidth)) || a.strokeWidth)
         return { ...a, color, strokeWidth: Number.isFinite(strokeWidth) ? Math.max(1, strokeWidth) : a.strokeWidth }
       }
@@ -287,17 +287,31 @@ function App() {
     setAnnotations(annotations.filter(a => a.page !== currentPage))
   }
 
+  const normalizeHexColor = (input: string) => {
+    const raw = (input || '').trim().replace('#', '')
+    const expanded = raw.length === 3 ? raw.split('').map(c => c + c).join('') : raw
+    const valid = /^[0-9a-fA-F]{6}$/.test(expanded)
+    return `#${valid ? expanded : '000000'}`
+  }
+
   const hexToRgb = (hex: string) => {
-    const clean = hex.replace('#', '')
-    const full = clean.length === 3
-      ? clean.split('').map(c => c + c).join('')
-      : clean
+    const full = normalizeHexColor(hex).replace('#', '')
     const num = Number.parseInt(full, 16)
     return {
       r: ((num >> 16) & 255) / 255,
       g: ((num >> 8) & 255) / 255,
       b: (num & 255) / 255
     }
+  }
+
+  const dataUrlToUint8Array = (dataUrl: string) => {
+    const base64 = dataUrl.split(',')[1] || ''
+    const binary = atob(base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    return bytes
   }
 
   const handleDownload = async () => {
@@ -365,12 +379,12 @@ function App() {
             if (drawCtx) {
               drawCtx.clearRect(0, 0, width, height)
               drawCtx.font = `${fontPx}px sans-serif`
-              drawCtx.fillStyle = ann.color
+              drawCtx.fillStyle = normalizeHexColor(ann.color)
               drawCtx.textBaseline = 'top'
               drawCtx.fillText(ann.text, 0, 0)
 
               const pngDataUrl = textCanvas.toDataURL('image/png')
-              const pngBytes = await fetch(pngDataUrl).then(r => r.arrayBuffer())
+              const pngBytes = dataUrlToUint8Array(pngDataUrl)
               const image = await pdf.embedPng(pngBytes)
               page.drawImage(image, {
                 x,
@@ -404,7 +418,7 @@ function App() {
         }
       }
 
-      const modifiedBytes = await pdf.save()
+      const modifiedBytes = await pdf.save({ useObjectStreams: false })
       const outBuffer = modifiedBytes.buffer.slice(
         modifiedBytes.byteOffset,
         modifiedBytes.byteOffset + modifiedBytes.byteLength
@@ -421,7 +435,8 @@ function App() {
       URL.revokeObjectURL(url)
     } catch (err) {
       console.error('Error exporting PDF:', err)
-      alert('匯出 PDF 失敗，請再試一次')
+      const message = err instanceof Error ? err.message : String(err)
+      alert(`匯出 PDF 失敗：${message}`)
     }
   }
 
