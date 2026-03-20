@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import * as pdfjs from 'pdfjs-dist'
+import { PDFDocument as PDFLibDocument, rgb } from 'pdf-lib'
 
 // Use bundled worker (works reliably on GitHub Pages)
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -43,6 +44,7 @@ function App() {
   const [pdfDoc, setPdfDoc] = useState<PDFDocument | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [fileName, setFileName] = useState<string>('')
+  const [originalPdfBytes, setOriginalPdfBytes] = useState<Uint8Array | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [scale, setScale] = useState(1.5)
   const [isLoading, setIsLoading] = useState(false)
@@ -68,7 +70,9 @@ function App() {
 
     try {
       const arrayBuffer = await file.arrayBuffer()
-      const pdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
+      const bytes = new Uint8Array(arrayBuffer)
+      setOriginalPdfBytes(bytes)
+      const pdf = await pdfjs.getDocument({ data: bytes }).promise
       setPdfDoc(pdf)
       setCurrentPage(1)
       setAnnotations([])
@@ -213,12 +217,117 @@ function App() {
     setAnnotations(annotations.filter(a => a.page !== currentPage))
   }
 
+  const hexToRgb = (hex: string) => {
+    const clean = hex.replace('#', '')
+    const full = clean.length === 3
+      ? clean.split('').map(c => c + c).join('')
+      : clean
+    const num = Number.parseInt(full, 16)
+    return {
+      r: ((num >> 16) & 255) / 255,
+      g: ((num >> 8) & 255) / 255,
+      b: (num & 255) / 255
+    }
+  }
+
   const handleDownload = async () => {
-    if (!pdfDoc) return
-    
-    // For now, just download the original PDF
-    // Full implementation would merge annotations using pdf-lib
-    alert('Full PDF export coming soon!')
+    if (!pdfDoc || !originalPdfBytes || !canvasRef.current) return
+
+    try {
+      const pdf = await PDFLibDocument.load(originalPdfBytes)
+      const pages = pdf.getPages()
+      const canvas = canvasRef.current
+
+      for (const ann of annotations) {
+        const page = pages[ann.page - 1]
+        if (!page) continue
+
+        const pageWidth = page.getWidth()
+        const pageHeight = page.getHeight()
+        const scaleX = pageWidth / canvas.width
+        const scaleY = pageHeight / canvas.height
+
+        if (ann.type === 'highlight') {
+          const x = ann.x * scaleX
+          const y = pageHeight - (ann.y + ann.height) * scaleY
+          page.drawRectangle({
+            x,
+            y,
+            width: ann.width * scaleX,
+            height: ann.height * scaleY,
+            color: rgb(1, 0.92, 0.23),
+            opacity: 0.35,
+            borderWidth: 0
+          })
+        }
+
+        if (ann.type === 'rectangle') {
+          const x = ann.x * scaleX
+          const y = pageHeight - (ann.y + ann.height) * scaleY
+          page.drawRectangle({
+            x,
+            y,
+            width: ann.width * scaleX,
+            height: ann.height * scaleY,
+            borderColor: rgb(0.86, 0.11, 0.11),
+            borderWidth: 2,
+            opacity: 1
+          })
+        }
+
+        if (ann.type === 'text') {
+          const x = ann.x * scaleX
+          const y = pageHeight - ann.y * scaleY - ann.fontSize
+          const c = hexToRgb(ann.color)
+          page.drawText(ann.text, {
+            x,
+            y,
+            size: ann.fontSize,
+            color: rgb(c.r, c.g, c.b)
+          })
+        }
+
+        if (ann.type === 'pen') {
+          const c = hexToRgb(ann.color)
+          for (let i = 1; i < ann.points.length; i++) {
+            const p1 = ann.points[i - 1]
+            const p2 = ann.points[i]
+            page.drawLine({
+              start: {
+                x: p1.x * scaleX,
+                y: pageHeight - p1.y * scaleY
+              },
+              end: {
+                x: p2.x * scaleX,
+                y: pageHeight - p2.y * scaleY
+              },
+              thickness: ann.strokeWidth,
+              color: rgb(c.r, c.g, c.b),
+              opacity: 1
+            })
+          }
+        }
+      }
+
+      const modifiedBytes = await pdf.save()
+      const outBuffer = modifiedBytes.buffer.slice(
+        modifiedBytes.byteOffset,
+        modifiedBytes.byteOffset + modifiedBytes.byteLength
+      ) as ArrayBuffer
+      const blob = new Blob([outBuffer], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const baseName = fileName.toLowerCase().endsWith('.pdf') ? fileName.slice(0, -4) : (fileName || 'document')
+      a.href = url
+      a.download = `${baseName}-edited.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Error exporting PDF:', err)
+      alert('匯出 PDF 失敗，請再試一次')
+    }
   }
 
   return (
