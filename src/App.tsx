@@ -304,7 +304,7 @@ function App() {
     if (!pdfDoc || !originalPdfBytes || !canvasRef.current) return
 
     try {
-      const pdf = await PDFLibDocument.load(originalPdfBytes)
+      const pdf = await PDFLibDocument.load(originalPdfBytes, { ignoreEncryption: true })
       const pages = pdf.getPages()
       const canvas = canvasRef.current
 
@@ -347,14 +347,39 @@ function App() {
 
         if (ann.type === 'text') {
           const x = ann.x * scaleX
-          const y = pageHeight - ann.y * scaleY - ann.fontSize
-          const c = hexToRgb(ann.color)
-          page.drawText(ann.text, {
-            x,
-            y,
-            size: ann.fontSize,
-            color: rgb(c.r, c.g, c.b)
-          })
+          const yTop = ann.y * scaleY
+
+          // Render text as image to support all languages (e.g. Chinese)
+          const textCanvas = document.createElement('canvas')
+          const textCtx = textCanvas.getContext('2d')
+          if (textCtx) {
+            const fontPx = Math.max(8, ann.fontSize * scaleY)
+            textCtx.font = `${fontPx}px sans-serif`
+            const metrics = textCtx.measureText(ann.text)
+            const width = Math.max(1, Math.ceil(metrics.width + 8))
+            const height = Math.max(1, Math.ceil(fontPx * 1.4))
+            textCanvas.width = width
+            textCanvas.height = height
+
+            const drawCtx = textCanvas.getContext('2d')
+            if (drawCtx) {
+              drawCtx.clearRect(0, 0, width, height)
+              drawCtx.font = `${fontPx}px sans-serif`
+              drawCtx.fillStyle = ann.color
+              drawCtx.textBaseline = 'top'
+              drawCtx.fillText(ann.text, 0, 0)
+
+              const pngDataUrl = textCanvas.toDataURL('image/png')
+              const pngBytes = await fetch(pngDataUrl).then(r => r.arrayBuffer())
+              const image = await pdf.embedPng(pngBytes)
+              page.drawImage(image, {
+                x,
+                y: pageHeight - yTop - height,
+                width,
+                height
+              })
+            }
+          }
         }
 
         if (ann.type === 'pen') {
