@@ -20,6 +20,14 @@ type AnnotationBase = {
   page: number
 }
 
+
+
+interface DragState {
+  id: string
+  offsetX: number
+  offsetY: number
+}
+
 type Annotation = (AnnotationBase & {
   type: 'highlight' | 'rectangle'
   x: number
@@ -59,6 +67,7 @@ function App() {
   const [textSize, setTextSize] = useState(20)
   const [penColor, setPenColor] = useState('#16a34a')
   const [penSize, setPenSize] = useState(3)
+  const [dragState, setDragState] = useState<DragState | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -121,6 +130,54 @@ function App() {
     setAnnotations(prev => prev.filter(a => a.id !== id))
   }
 
+  const handleEditAnnotation = (id: string) => {
+    setAnnotations(prev => prev.map(a => {
+      if (a.id !== id) return a
+
+      if (a.type === 'text') {
+        const text = window.prompt('編輯文字內容：', a.text)
+        if (text === null) return a
+        const color = window.prompt('文字顏色（hex）', a.color) || a.color
+        const size = Number(window.prompt('字體大小(px)', String(a.fontSize)) || a.fontSize)
+        return { ...a, text: text.trim() || a.text, color, fontSize: Number.isFinite(size) ? size : a.fontSize }
+      }
+
+      if (a.type === 'highlight' || a.type === 'rectangle') {
+        const x = Number(window.prompt('X 座標', String(Math.round(a.x))) || a.x)
+        const y = Number(window.prompt('Y 座標', String(Math.round(a.y))) || a.y)
+        const width = Number(window.prompt('寬度', String(Math.round(a.width))) || a.width)
+        const height = Number(window.prompt('高度', String(Math.round(a.height))) || a.height)
+        return {
+          ...a,
+          x: Number.isFinite(x) ? x : a.x,
+          y: Number.isFinite(y) ? y : a.y,
+          width: Number.isFinite(width) ? Math.max(1, width) : a.width,
+          height: Number.isFinite(height) ? Math.max(1, height) : a.height
+        }
+      }
+
+      if (a.type === 'pen') {
+        const color = window.prompt('筆色（hex）', a.color) || a.color
+        const strokeWidth = Number(window.prompt('粗細(px)', String(a.strokeWidth)) || a.strokeWidth)
+        return { ...a, color, strokeWidth: Number.isFinite(strokeWidth) ? Math.max(1, strokeWidth) : a.strokeWidth }
+      }
+
+      return a
+    }))
+  }
+
+  const startTextDrag = (e: React.MouseEvent, id: string, x: number, y: number) => {
+    if (tool !== 'select') return
+    e.stopPropagation()
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setDragState({
+      id,
+      offsetX: e.clientX - rect.left - x,
+      offsetY: e.clientY - rect.top - y
+    })
+  }
+
   const handleMouseDown = (e: React.MouseEvent) => {
     if (tool === 'select' || tool === 'erase') return
 
@@ -158,8 +215,16 @@ function App() {
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDrawing || tool !== 'pen') return
     const rect = canvasRef.current!.getBoundingClientRect()
+
+    if (dragState) {
+      const x = e.clientX - rect.left - dragState.offsetX
+      const y = e.clientY - rect.top - dragState.offsetY
+      setAnnotations(prev => prev.map(a => (a.id === dragState.id && a.type === 'text') ? { ...a, x, y } : a))
+      return
+    }
+
+    if (!isDrawing || tool !== 'pen') return
     const point = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top
@@ -168,6 +233,11 @@ function App() {
   }
 
   const handleMouseUp = (e: React.MouseEvent) => {
+    if (dragState) {
+      setDragState(null)
+      return
+    }
+
     if (!isDrawing || tool === 'select' || tool === 'text') return
 
     const rect = canvasRef.current!.getBoundingClientRect()
@@ -422,6 +492,7 @@ function App() {
                 🗑️ Clear
               </button>
               {tool === 'erase' && <span className="text-sm text-orange-600">點選標註即可刪除</span>}
+              {tool === 'select' && <span className="text-sm text-blue-600">文字可拖曳，雙擊標註可編輯</span>}
             </div>
 
             <div className="flex items-center gap-4">
@@ -478,6 +549,7 @@ function App() {
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
                 className="block"
               />
 
@@ -491,6 +563,7 @@ function App() {
                         key={ann.id}
                         className="absolute bg-yellow-300 opacity-30"
                         onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
+                        onDoubleClick={() => tool === 'select' && handleEditAnnotation(ann.id)}
                         style={{
                           left: ann.x,
                           top: ann.y,
@@ -508,6 +581,7 @@ function App() {
                         key={ann.id}
                         className="absolute border-2 border-red-500"
                         onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
+                        onDoubleClick={() => tool === 'select' && handleEditAnnotation(ann.id)}
                         style={{
                           left: ann.x,
                           top: ann.y,
@@ -524,6 +598,8 @@ function App() {
                       <div
                         key={ann.id}
                         className="absolute font-semibold whitespace-pre-wrap select-none"
+                        onMouseDown={(e) => startTextDrag(e, ann.id, ann.x, ann.y)}
+                        onDoubleClick={() => tool === 'select' && handleEditAnnotation(ann.id)}
                         onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
                         style={{
                           left: ann.x,
@@ -532,7 +608,8 @@ function App() {
                           color: ann.color,
                           fontSize: `${ann.fontSize}px`,
                           lineHeight: 1.25,
-                          pointerEvents: tool === 'erase' ? 'auto' : 'none'
+                          cursor: tool === 'select' ? 'move' : (tool === 'erase' ? 'pointer' : 'default'),
+                          pointerEvents: (tool === 'erase' || tool === 'select') ? 'auto' : 'none'
                         }}
                       >
                         {ann.text}
@@ -548,8 +625,9 @@ function App() {
                         className="absolute inset-0"
                         width="100%"
                         height="100%"
-                        style={{ pointerEvents: tool === 'erase' ? 'auto' : 'none' }}
+                        style={{ pointerEvents: (tool === 'erase' || tool === 'select') ? 'auto' : 'none' }}
                         onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
+                        onDoubleClick={() => tool === 'select' && handleEditAnnotation(ann.id)}
                       >
                         <polyline
                           points={points}
