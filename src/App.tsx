@@ -12,26 +12,32 @@ interface PDFDocument {
   getPage: (num: number) => Promise<any>
 }
 
-type Tool = 'select' | 'highlight' | 'rectangle' | 'text' | 'pen'
+type Tool = 'select' | 'highlight' | 'rectangle' | 'text' | 'pen' | 'erase'
 
-type Annotation = {
-  type: 'highlight' | 'rectangle'
+type AnnotationBase = {
+  id: string
   page: number
+}
+
+type Annotation = (AnnotationBase & {
+  type: 'highlight' | 'rectangle'
   x: number
   y: number
   width: number
   height: number
-} | {
+}) | (AnnotationBase & {
   type: 'text'
-  page: number
   x: number
   y: number
   text: string
-} | {
+  color: string
+  fontSize: number
+}) | (AnnotationBase & {
   type: 'pen'
-  page: number
   points: Array<{ x: number; y: number }>
-}
+  color: string
+  strokeWidth: number
+})
 
 function App() {
   const [pdfDoc, setPdfDoc] = useState<PDFDocument | null>(null)
@@ -47,6 +53,10 @@ function App() {
   const [isDrawing, setIsDrawing] = useState(false)
   const [startPos, setStartPos] = useState({ x: 0, y: 0 })
   const [currentPenPoints, setCurrentPenPoints] = useState<Array<{ x: number; y: number }>>([])
+  const [textColor, setTextColor] = useState('#1d4ed8')
+  const [textSize, setTextSize] = useState(20)
+  const [penColor, setPenColor] = useState('#16a34a')
+  const [penSize, setPenSize] = useState(3)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -101,8 +111,14 @@ function App() {
     }
   }
 
+  const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+  const handleDeleteAnnotation = (id: string) => {
+    setAnnotations(prev => prev.filter(a => a.id !== id))
+  }
+
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (tool === 'select') return
+    if (tool === 'select' || tool === 'erase') return
 
     const rect = canvasRef.current!.getBoundingClientRect()
     const point = {
@@ -115,11 +131,14 @@ function App() {
       if (!text || !text.trim()) return
 
       setAnnotations(prev => [...prev, {
+        id: makeId(),
         type: 'text',
         page: currentPage,
         x: point.x,
         y: point.y,
-        text: text.trim()
+        text: text.trim(),
+        color: textColor,
+        fontSize: textSize
       }])
       return
     }
@@ -155,6 +174,7 @@ function App() {
 
     if (tool === 'highlight') {
       setAnnotations(prev => [...prev, {
+        id: makeId(),
         type: 'highlight',
         page: currentPage,
         x: Math.min(startPos.x, endPos.x),
@@ -164,6 +184,7 @@ function App() {
       }])
     } else if (tool === 'rectangle') {
       setAnnotations(prev => [...prev, {
+        id: makeId(),
         type: 'rectangle',
         page: currentPage,
         x: Math.min(startPos.x, endPos.x),
@@ -174,9 +195,12 @@ function App() {
     } else if (tool === 'pen') {
       if (currentPenPoints.length > 1) {
         setAnnotations(prev => [...prev, {
+          id: makeId(),
           type: 'pen',
           page: currentPage,
-          points: currentPenPoints
+          points: currentPenPoints,
+          color: penColor,
+          strokeWidth: penSize
         }])
       }
       setCurrentPenPoints([])
@@ -257,6 +281,30 @@ function App() {
               >
                 ✍️ Handwrite
               </button>
+              <button
+                onClick={() => setTool('erase')}
+                className={`px-3 py-1.5 rounded ${tool === 'erase' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100'}`}
+              >
+                🩹 Eraser
+              </button>
+
+              {tool === 'text' && (
+                <div className="ml-2 flex items-center gap-2 text-sm">
+                  <span className="text-gray-500">Text</span>
+                  <input type="color" value={textColor} onChange={(e) => setTextColor(e.target.value)} className="w-8 h-8 p-0 border rounded" />
+                  <input type="range" min={12} max={48} value={textSize} onChange={(e) => setTextSize(Number(e.target.value))} />
+                  <span className="w-10 text-gray-600">{textSize}px</span>
+                </div>
+              )}
+
+              {tool === 'pen' && (
+                <div className="ml-2 flex items-center gap-2 text-sm">
+                  <span className="text-gray-500">Pen</span>
+                  <input type="color" value={penColor} onChange={(e) => setPenColor(e.target.value)} className="w-8 h-8 p-0 border rounded" />
+                  <input type="range" min={1} max={12} value={penSize} onChange={(e) => setPenSize(Number(e.target.value))} />
+                  <span className="w-10 text-gray-600">{penSize}px</span>
+                </div>
+              )}
               
               <button
                 onClick={clearAnnotations}
@@ -264,6 +312,7 @@ function App() {
               >
                 🗑️ Clear
               </button>
+              {tool === 'erase' && <span className="text-sm text-orange-600">點選標註即可刪除</span>}
             </div>
 
             <div className="flex items-center gap-4">
@@ -313,7 +362,7 @@ function App() {
             <div 
               ref={containerRef}
               className="relative inline-block bg-white shadow-lg"
-              style={{ cursor: tool === 'select' ? 'default' : 'crosshair' }}
+              style={{ cursor: tool === 'select' ? 'default' : tool === 'erase' ? 'pointer' : 'crosshair' }}
             >
               <canvas
                 ref={canvasRef}
@@ -326,17 +375,19 @@ function App() {
               {/* Render annotations */}
               {annotations
                 .filter(a => a.page === currentPage)
-                .map((ann, i) => {
+                .map((ann) => {
                   if (ann.type === 'highlight') {
                     return (
                       <div
-                        key={i}
+                        key={ann.id}
                         className="absolute bg-yellow-300 opacity-30"
+                        onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
                         style={{
                           left: ann.x,
                           top: ann.y,
                           width: ann.width,
-                          height: ann.height
+                          height: ann.height,
+                          pointerEvents: tool === 'erase' ? 'auto' : 'none'
                         }}
                       />
                     )
@@ -345,13 +396,15 @@ function App() {
                   if (ann.type === 'rectangle') {
                     return (
                       <div
-                        key={i}
+                        key={ann.id}
                         className="absolute border-2 border-red-500"
+                        onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
                         style={{
                           left: ann.x,
                           top: ann.y,
                           width: ann.width,
-                          height: ann.height
+                          height: ann.height,
+                          pointerEvents: tool === 'erase' ? 'auto' : 'none'
                         }}
                       />
                     )
@@ -360,12 +413,17 @@ function App() {
                   if (ann.type === 'text') {
                     return (
                       <div
-                        key={i}
-                        className="absolute text-blue-700 font-semibold whitespace-pre-wrap select-none"
+                        key={ann.id}
+                        className="absolute font-semibold whitespace-pre-wrap select-none"
+                        onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
                         style={{
                           left: ann.x,
                           top: ann.y,
-                          maxWidth: '280px'
+                          maxWidth: '280px',
+                          color: ann.color,
+                          fontSize: `${ann.fontSize}px`,
+                          lineHeight: 1.25,
+                          pointerEvents: tool === 'erase' ? 'auto' : 'none'
                         }}
                       >
                         {ann.text}
@@ -376,12 +434,19 @@ function App() {
                   if (ann.type === 'pen') {
                     const points = ann.points.map((p: { x: number; y: number }) => `${p.x},${p.y}`).join(' ')
                     return (
-                      <svg key={i} className="absolute inset-0 pointer-events-none" width="100%" height="100%">
+                      <svg
+                        key={ann.id}
+                        className="absolute inset-0"
+                        width="100%"
+                        height="100%"
+                        style={{ pointerEvents: tool === 'erase' ? 'auto' : 'none' }}
+                        onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
+                      >
                         <polyline
                           points={points}
                           fill="none"
-                          stroke="#16a34a"
-                          strokeWidth="3"
+                          stroke={ann.color}
+                          strokeWidth={ann.strokeWidth}
                           strokeLinecap="round"
                           strokeLinejoin="round"
                         />
@@ -398,8 +463,8 @@ function App() {
                   <polyline
                     points={currentPenPoints.map((p) => `${p.x},${p.y}`).join(' ')}
                     fill="none"
-                    stroke="#16a34a"
-                    strokeWidth="3"
+                    stroke={penColor}
+                    strokeWidth={penSize}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
