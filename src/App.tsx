@@ -24,6 +24,7 @@ type AnnotationBase = {
 
 interface DragState {
   id: string
+  kind: 'text' | 'image'
   offsetX: number
   offsetY: number
 }
@@ -32,6 +33,14 @@ interface DragPreview {
   id: string
   x: number
   y: number
+}
+
+interface ImageResizeState {
+  id: string
+  startX: number
+  startY: number
+  startWidth: number
+  startHeight: number
 }
 
 type Annotation = (AnnotationBase & {
@@ -84,6 +93,7 @@ function App() {
   const [pendingImageName, setPendingImageName] = useState('')
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
+  const [imageResizeState, setImageResizeState] = useState<ImageResizeState | null>(null)
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const dragPreviewRef = useRef<DragPreview | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -156,27 +166,50 @@ function App() {
   }, [pdfDoc, currentPage, scale])
 
   useEffect(() => {
-    if (!dragState) return
+    if (!dragState && !imageResizeState) return
 
     const handleWindowMove = (e: MouseEvent) => {
       const rect = canvasRef.current?.getBoundingClientRect()
       if (!rect) return
-      const x = e.clientX - rect.left - dragState.offsetX
-      const y = e.clientY - rect.top - dragState.offsetY
-      const preview = { id: dragState.id, x, y }
-      dragPreviewRef.current = preview
-      setDragPreview(preview)
+
+      if (dragState) {
+        const x = e.clientX - rect.left - dragState.offsetX
+        const y = e.clientY - rect.top - dragState.offsetY
+        const preview = { id: dragState.id, x, y }
+        dragPreviewRef.current = preview
+        setDragPreview(preview)
+        return
+      }
+
+      if (imageResizeState) {
+        const dx = e.clientX - imageResizeState.startX
+        const dy = e.clientY - imageResizeState.startY
+        const nextWidth = Math.max(30, imageResizeState.startWidth + dx)
+        const nextHeight = Math.max(30, imageResizeState.startHeight + dy)
+        setAnnotations(prev => prev.map(a => (
+          a.id === imageResizeState.id && a.type === 'image'
+            ? { ...a, width: nextWidth, height: nextHeight }
+            : a
+        )))
+      }
     }
 
     const handleWindowUp = () => {
-      const preview = dragPreviewRef.current
-      setAnnotations(prev => prev.map(a => (a.id === dragState.id && a.type === 'text' && preview?.id === dragState.id)
-        ? { ...a, x: preview.x, y: preview.y }
-        : a
-      ))
-      setDragState(null)
-      setDragPreview(null)
-      dragPreviewRef.current = null
+      if (dragState) {
+        const preview = dragPreviewRef.current
+        setAnnotations(prev => prev.map(a => (
+          a.id === dragState.id && (a.type === 'text' || a.type === 'image') && preview?.id === dragState.id
+            ? { ...a, x: preview.x, y: preview.y }
+            : a
+        )))
+        setDragState(null)
+        setDragPreview(null)
+        dragPreviewRef.current = null
+      }
+
+      if (imageResizeState) {
+        setImageResizeState(null)
+      }
     }
 
     window.addEventListener('mousemove', handleWindowMove)
@@ -186,7 +219,7 @@ function App() {
       window.removeEventListener('mousemove', handleWindowMove)
       window.removeEventListener('mouseup', handleWindowUp)
     }
-  }, [dragState])
+  }, [dragState, imageResizeState])
 
   const handlePrevPage = () => {
     if (currentPage > 1) {
@@ -252,12 +285,41 @@ function App() {
     if (!rect) return
     setDragState({
       id,
+      kind: 'text',
       offsetX: e.clientX - rect.left - x,
       offsetY: e.clientY - rect.top - y
     })
     const preview = { id, x, y }
     dragPreviewRef.current = preview
     setDragPreview(preview)
+  }
+
+  const startImageDrag = (e: React.MouseEvent, id: string, x: number, y: number) => {
+    if (tool !== 'select') return
+    e.stopPropagation()
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setDragState({
+      id,
+      kind: 'image',
+      offsetX: e.clientX - rect.left - x,
+      offsetY: e.clientY - rect.top - y
+    })
+    const preview = { id, x, y }
+    dragPreviewRef.current = preview
+    setDragPreview(preview)
+  }
+
+  const startImageResize = (e: React.MouseEvent, ann: Extract<Annotation, { type: 'image' }>) => {
+    if (tool !== 'select') return
+    e.stopPropagation()
+    setImageResizeState({
+      id: ann.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      startWidth: ann.width,
+      startHeight: ann.height
+    })
   }
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -809,22 +871,53 @@ function App() {
                   }
 
                   if (ann.type === 'image') {
+                    const previewing = dragPreview?.id === ann.id
+                    const drawX = previewing ? dragPreview.x : ann.x
+                    const drawY = previewing ? dragPreview.y : ann.y
+                    const selected = selectedAnnotationId === ann.id
+
                     return (
-                      <img
+                      <div
                         key={ann.id}
-                        src={ann.dataUrl}
-                        alt="annotation"
-                        onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
                         style={{
                           position: 'absolute',
-                          left: ann.x,
-                          top: ann.y,
+                          left: drawX,
+                          top: drawY,
                           width: ann.width,
                           height: ann.height,
-                          objectFit: 'contain',
-                          pointerEvents: tool === 'erase' ? 'auto' : 'none'
+                          pointerEvents: (tool === 'erase' || tool === 'select') ? 'auto' : 'none',
+                          outline: selected ? '2px dashed #8b5cf6' : 'none',
+                          outlineOffset: '2px'
                         }}
-                      />
+                        onMouseDown={(e) => startImageDrag(e, ann.id, drawX, drawY)}
+                        onClick={() => {
+                          if (tool === 'erase') handleDeleteAnnotation(ann.id)
+                          if (tool === 'select') setSelectedAnnotationId(ann.id)
+                        }}
+                      >
+                        <img
+                          src={ann.dataUrl}
+                          alt="annotation"
+                          style={{ width: '100%', height: '100%', objectFit: 'contain', userSelect: 'none' }}
+                          draggable={false}
+                        />
+                        {tool === 'select' && selected && (
+                          <div
+                            onMouseDown={(e) => startImageResize(e, ann)}
+                            style={{
+                              position: 'absolute',
+                              right: -6,
+                              bottom: -6,
+                              width: 14,
+                              height: 14,
+                              background: '#8b5cf6',
+                              borderRadius: 999,
+                              border: '2px solid white',
+                              cursor: 'nwse-resize'
+                            }}
+                          />
+                        )}
+                      </div>
                     )
                   }
 
