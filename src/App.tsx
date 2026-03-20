@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import * as pdfjs from 'pdfjs-dist'
 
-// Set worker
-pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`
+// Use bundled worker (works reliably on GitHub Pages)
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url
+).toString()
 
 interface PDFDocument {
   numPages: number
@@ -33,7 +36,7 @@ function App() {
 
     try {
       const arrayBuffer = await file.arrayBuffer()
-      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise
+      const pdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
       setPdfDoc(pdf)
       setCurrentPage(1)
       setAnnotations([])
