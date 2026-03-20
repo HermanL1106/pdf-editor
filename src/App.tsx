@@ -535,21 +535,24 @@ function App() {
           const x = ann.x * scaleX
           const yTop = ann.y * scaleY
 
-          // Render text as image to support all languages (e.g. Chinese)
+          // Render text as HiDPI image to support all languages (e.g. Chinese)
           const textCanvas = document.createElement('canvas')
           const textCtx = textCanvas.getContext('2d')
           if (textCtx) {
             const fontPx = Math.max(8, ann.fontSize * scaleY)
+            const exportDpiScale = 3
             textCtx.font = `${fontPx}px sans-serif`
             const metrics = textCtx.measureText(ann.text)
-            const width = Math.max(1, Math.ceil(metrics.width + 8))
-            const height = Math.max(1, Math.ceil(fontPx * 1.4))
-            textCanvas.width = width
-            textCanvas.height = height
+            const drawWidth = Math.max(1, Math.ceil(metrics.width + 8))
+            const drawHeight = Math.max(1, Math.ceil(fontPx * 1.4))
+
+            textCanvas.width = Math.max(1, Math.ceil(drawWidth * exportDpiScale))
+            textCanvas.height = Math.max(1, Math.ceil(drawHeight * exportDpiScale))
 
             const drawCtx = textCanvas.getContext('2d')
             if (drawCtx) {
-              drawCtx.clearRect(0, 0, width, height)
+              drawCtx.scale(exportDpiScale, exportDpiScale)
+              drawCtx.clearRect(0, 0, drawWidth, drawHeight)
               drawCtx.font = `${fontPx}px sans-serif`
               drawCtx.fillStyle = normalizeHexColor(ann.color)
               drawCtx.textBaseline = 'top'
@@ -560,9 +563,9 @@ function App() {
               const image = await pdf.embedPng(pngBytes)
               page.drawImage(image, {
                 x,
-                y: pageHeight - yTop - height,
-                width,
-                height
+                y: pageHeight - yTop - drawHeight,
+                width: drawWidth,
+                height: drawHeight
               })
             }
           }
