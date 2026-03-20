@@ -80,8 +80,9 @@ function App() {
     try {
       const arrayBuffer = await file.arrayBuffer()
       const bytes = new Uint8Array(arrayBuffer)
-      setOriginalPdfBytes(bytes)
-      const pdf = await pdfjs.getDocument({ data: bytes }).promise
+      // Keep a dedicated copy for export (pdf.js may transfer/consume the buffer internally)
+      setOriginalPdfBytes(bytes.slice())
+      const pdf = await pdfjs.getDocument({ data: bytes.slice() }).promise
       setPdfDoc(pdf)
       setCurrentPage(1)
       setAnnotations([])
