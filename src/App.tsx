@@ -12,6 +12,27 @@ interface PDFDocument {
   getPage: (num: number) => Promise<any>
 }
 
+type Tool = 'select' | 'highlight' | 'rectangle' | 'text' | 'pen'
+
+type Annotation = {
+  type: 'highlight' | 'rectangle'
+  page: number
+  x: number
+  y: number
+  width: number
+  height: number
+} | {
+  type: 'text'
+  page: number
+  x: number
+  y: number
+  text: string
+} | {
+  type: 'pen'
+  page: number
+  points: Array<{ x: number; y: number }>
+}
+
 function App() {
   const [pdfDoc, setPdfDoc] = useState<PDFDocument | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
@@ -21,10 +42,11 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
 
   // Annotation state
-  const [tool, setTool] = useState<'select' | 'highlight' | 'rectangle'>('select')
-  const [annotations, setAnnotations] = useState<any[]>([])
+  const [tool, setTool] = useState<Tool>('select')
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [isDrawing, setIsDrawing] = useState(false)
   const [startPos, setStartPos] = useState({ x: 0, y: 0 })
+  const [currentPenPoints, setCurrentPenPoints] = useState<Array<{ x: number; y: number }>>([])
   const containerRef = useRef<HTMLDivElement>(null)
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -81,17 +103,49 @@ function App() {
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (tool === 'select') return
-    
+
     const rect = canvasRef.current!.getBoundingClientRect()
-    setStartPos({
+    const point = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top
-    })
+    }
+
+    if (tool === 'text') {
+      const text = window.prompt('輸入要新增的文字：')
+      if (!text || !text.trim()) return
+
+      setAnnotations(prev => [...prev, {
+        type: 'text',
+        page: currentPage,
+        x: point.x,
+        y: point.y,
+        text: text.trim()
+      }])
+      return
+    }
+
+    if (tool === 'pen') {
+      setCurrentPenPoints([point])
+      setIsDrawing(true)
+      return
+    }
+
+    setStartPos(point)
     setIsDrawing(true)
   }
 
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDrawing || tool !== 'pen') return
+    const rect = canvasRef.current!.getBoundingClientRect()
+    const point = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    }
+    setCurrentPenPoints(prev => [...prev, point])
+  }
+
   const handleMouseUp = (e: React.MouseEvent) => {
-    if (!isDrawing || tool === 'select') return
+    if (!isDrawing || tool === 'select' || tool === 'text') return
 
     const rect = canvasRef.current!.getBoundingClientRect()
     const endPos = {
@@ -100,7 +154,7 @@ function App() {
     }
 
     if (tool === 'highlight') {
-      setAnnotations([...annotations, {
+      setAnnotations(prev => [...prev, {
         type: 'highlight',
         page: currentPage,
         x: Math.min(startPos.x, endPos.x),
@@ -109,7 +163,7 @@ function App() {
         height: Math.abs(endPos.y - startPos.y)
       }])
     } else if (tool === 'rectangle') {
-      setAnnotations([...annotations, {
+      setAnnotations(prev => [...prev, {
         type: 'rectangle',
         page: currentPage,
         x: Math.min(startPos.x, endPos.x),
@@ -117,6 +171,15 @@ function App() {
         width: Math.abs(endPos.x - startPos.x),
         height: Math.abs(endPos.y - startPos.y)
       }])
+    } else if (tool === 'pen') {
+      if (currentPenPoints.length > 1) {
+        setAnnotations(prev => [...prev, {
+          type: 'pen',
+          page: currentPage,
+          points: currentPenPoints
+        }])
+      }
+      setCurrentPenPoints([])
     }
 
     setIsDrawing(false)
@@ -182,6 +245,18 @@ function App() {
               >
                 🔲 Rectangle
               </button>
+              <button
+                onClick={() => setTool('text')}
+                className={`px-3 py-1.5 rounded ${tool === 'text' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100'}`}
+              >
+                🔤 Text
+              </button>
+              <button
+                onClick={() => setTool('pen')}
+                className={`px-3 py-1.5 rounded ${tool === 'pen' ? 'bg-green-100 text-green-700' : 'bg-gray-100'}`}
+              >
+                ✍️ Handwrite
+              </button>
               
               <button
                 onClick={clearAnnotations}
@@ -243,38 +318,93 @@ function App() {
               <canvas
                 ref={canvasRef}
                 onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 className="block"
               />
-              
+
               {/* Render annotations */}
               {annotations
                 .filter(a => a.page === currentPage)
-                .map((ann, i) => (
-                  ann.type === 'highlight' ? (
-                    <div
-                      key={i}
-                      className="absolute bg-yellow-300 opacity-30"
-                      style={{
-                        left: ann.x,
-                        top: ann.y,
-                        width: ann.width,
-                        height: ann.height
-                      }}
-                    />
-                  ) : (
-                    <div
-                      key={i}
-                      className="absolute border-2 border-red-500"
-                      style={{
-                        left: ann.x,
-                        top: ann.y,
-                        width: ann.width,
-                        height: ann.height
-                      }}
-                    />
-                  )
-                ))}
+                .map((ann, i) => {
+                  if (ann.type === 'highlight') {
+                    return (
+                      <div
+                        key={i}
+                        className="absolute bg-yellow-300 opacity-30"
+                        style={{
+                          left: ann.x,
+                          top: ann.y,
+                          width: ann.width,
+                          height: ann.height
+                        }}
+                      />
+                    )
+                  }
+
+                  if (ann.type === 'rectangle') {
+                    return (
+                      <div
+                        key={i}
+                        className="absolute border-2 border-red-500"
+                        style={{
+                          left: ann.x,
+                          top: ann.y,
+                          width: ann.width,
+                          height: ann.height
+                        }}
+                      />
+                    )
+                  }
+
+                  if (ann.type === 'text') {
+                    return (
+                      <div
+                        key={i}
+                        className="absolute text-blue-700 font-semibold whitespace-pre-wrap select-none"
+                        style={{
+                          left: ann.x,
+                          top: ann.y,
+                          maxWidth: '280px'
+                        }}
+                      >
+                        {ann.text}
+                      </div>
+                    )
+                  }
+
+                  if (ann.type === 'pen') {
+                    const points = ann.points.map((p: { x: number; y: number }) => `${p.x},${p.y}`).join(' ')
+                    return (
+                      <svg key={i} className="absolute inset-0 pointer-events-none" width="100%" height="100%">
+                        <polyline
+                          points={points}
+                          fill="none"
+                          stroke="#16a34a"
+                          strokeWidth="3"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    )
+                  }
+
+                  return null
+                })}
+
+              {/* Preview current handwriting stroke */}
+              {tool === 'pen' && currentPenPoints.length > 1 && (
+                <svg className="absolute inset-0 pointer-events-none" width="100%" height="100%">
+                  <polyline
+                    points={currentPenPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                    fill="none"
+                    stroke="#16a34a"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
             </div>
           </div>
         ) : (
