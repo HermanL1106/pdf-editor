@@ -75,6 +75,7 @@ function App() {
   const [penSize, setPenSize] = useState(3)
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const dragPreviewRef = useRef<DragPreview | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -94,6 +95,7 @@ function App() {
       setPdfDoc(pdf)
       setCurrentPage(1)
       setAnnotations([])
+      setSelectedAnnotationId(null)
     } catch (err) {
       console.error('Error loading PDF:', err)
       alert('Failed to load PDF')
@@ -157,12 +159,16 @@ function App() {
   }, [dragState])
 
   const handlePrevPage = () => {
-    if (currentPage > 1) setCurrentPage(currentPage - 1)
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1)
+      setSelectedAnnotationId(null)
+    }
   }
 
   const handleNextPage = () => {
     if (pdfDoc && currentPage < pdfDoc.numPages) {
       setCurrentPage(currentPage + 1)
+      setSelectedAnnotationId(null)
     }
   }
 
@@ -170,6 +176,7 @@ function App() {
 
   const handleDeleteAnnotation = (id: string) => {
     setAnnotations(prev => prev.filter(a => a.id !== id))
+    if (selectedAnnotationId === id) setSelectedAnnotationId(null)
   }
 
   const handleEditAnnotation = (id: string) => {
@@ -318,6 +325,7 @@ function App() {
 
   const clearAnnotations = () => {
     setAnnotations(annotations.filter(a => a.page !== currentPage))
+    setSelectedAnnotationId(null)
   }
 
   const normalizeHexColor = (input: string) => {
@@ -345,6 +353,19 @@ function App() {
       bytes[i] = binary.charCodeAt(i)
     }
     return bytes
+  }
+
+  type TextAnnotation = Extract<Annotation, { type: 'text' }>
+
+  const selectedTextAnnotation = annotations.find(
+    (a): a is TextAnnotation => a.id === selectedAnnotationId && a.type === 'text' && a.page === currentPage
+  )
+
+  const updateSelectedTextAnnotation = (patch: Partial<TextAnnotation>) => {
+    if (!selectedAnnotationId) return
+    setAnnotations(prev => prev.map(a =>
+      (a.id === selectedAnnotationId && a.type === 'text') ? { ...a, ...patch } : a
+    ))
   }
 
   const handleDownload = async () => {
@@ -565,7 +586,7 @@ function App() {
                 🗑️ Clear
               </button>
               {tool === 'erase' && <span className="text-sm text-orange-600">點選標註即可刪除</span>}
-              {tool === 'select' && <span className="text-sm text-blue-600">文字可拖曳，雙擊標註可編輯</span>}
+              {tool === 'select' && <span className="text-sm text-blue-600">文字可拖曳，點選文字可在右側面板編輯</span>}
             </div>
 
             <div className="flex items-center gap-4">
@@ -611,7 +632,7 @@ function App() {
             <div className="text-2xl">⏳ Loading PDF...</div>
           </div>
         ) : pdfDoc ? (
-          <div className="max-w-6xl mx-auto">
+          <div className="max-w-6xl mx-auto flex items-start gap-6">
             <div 
               ref={containerRef}
               className="relative inline-block bg-white shadow-lg"
@@ -676,8 +697,10 @@ function App() {
                         key={ann.id}
                         className="absolute font-semibold whitespace-pre-wrap select-none"
                         onMouseDown={(e) => startTextDrag(e, ann.id, drawX, drawY)}
-                        onDoubleClick={() => tool === 'select' && handleEditAnnotation(ann.id)}
-                        onClick={() => tool === 'erase' && handleDeleteAnnotation(ann.id)}
+                        onClick={() => {
+                          if (tool === 'erase') handleDeleteAnnotation(ann.id)
+                          if (tool === 'select') setSelectedAnnotationId(ann.id)
+                        }}
                         style={{
                           left: drawX,
                           top: drawY,
@@ -686,7 +709,9 @@ function App() {
                           fontSize: `${ann.fontSize}px`,
                           lineHeight: 1.25,
                           cursor: tool === 'select' ? 'move' : (tool === 'erase' ? 'pointer' : 'default'),
-                          pointerEvents: (tool === 'erase' || tool === 'select') ? 'auto' : 'none'
+                          pointerEvents: (tool === 'erase' || tool === 'select') ? 'auto' : 'none',
+                          outline: selectedAnnotationId === ann.id ? '2px dashed #3b82f6' : 'none',
+                          outlineOffset: '2px'
                         }}
                       >
                         {ann.text}
@@ -735,6 +760,39 @@ function App() {
                 </svg>
               )}
             </div>
+
+            <aside className="w-72 bg-white rounded-lg shadow p-4 sticky top-4">
+              <h3 className="font-semibold text-gray-800 mb-3">文字編輯面板</h3>
+              {tool !== 'select' && <p className="text-sm text-gray-500">切換到 Select 後，點選文字即可編輯。</p>}
+              {tool === 'select' && !selectedTextAnnotation && (
+                <p className="text-sm text-gray-500">請先點選一段文字標註。</p>
+              )}
+              {tool === 'select' && selectedTextAnnotation && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">文字顏色</label>
+                    <input
+                      type="color"
+                      value={normalizeHexColor(selectedTextAnnotation.color)}
+                      onChange={(e) => updateSelectedTextAnnotation({ color: normalizeHexColor(e.target.value) })}
+                      className="w-14 h-10 p-1 border rounded"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">文字大小：{selectedTextAnnotation.fontSize}px</label>
+                    <input
+                      type="range"
+                      min={12}
+                      max={72}
+                      value={selectedTextAnnotation.fontSize}
+                      onChange={(e) => updateSelectedTextAnnotation({ fontSize: Number(e.target.value) })}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              )}
+            </aside>
           </div>
         ) : (
           <div className="text-center py-20">
