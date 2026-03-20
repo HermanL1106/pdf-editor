@@ -75,6 +75,7 @@ function App() {
   const [penSize, setPenSize] = useState(3)
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
+  const dragPreviewRef = useRef<DragPreview | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -121,6 +122,39 @@ function App() {
 
     renderPage()
   }, [pdfDoc, currentPage, scale])
+
+  useEffect(() => {
+    if (!dragState) return
+
+    const handleWindowMove = (e: MouseEvent) => {
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const x = e.clientX - rect.left - dragState.offsetX
+      const y = e.clientY - rect.top - dragState.offsetY
+      const preview = { id: dragState.id, x, y }
+      dragPreviewRef.current = preview
+      setDragPreview(preview)
+    }
+
+    const handleWindowUp = () => {
+      const preview = dragPreviewRef.current
+      setAnnotations(prev => prev.map(a => (a.id === dragState.id && a.type === 'text' && preview?.id === dragState.id)
+        ? { ...a, x: preview.x, y: preview.y }
+        : a
+      ))
+      setDragState(null)
+      setDragPreview(null)
+      dragPreviewRef.current = null
+    }
+
+    window.addEventListener('mousemove', handleWindowMove)
+    window.addEventListener('mouseup', handleWindowUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMove)
+      window.removeEventListener('mouseup', handleWindowUp)
+    }
+  }, [dragState])
 
   const handlePrevPage = () => {
     if (currentPage > 1) setCurrentPage(currentPage - 1)
@@ -184,7 +218,9 @@ function App() {
       offsetX: e.clientX - rect.left - x,
       offsetY: e.clientY - rect.top - y
     })
-    setDragPreview({ id, x, y })
+    const preview = { id, x, y }
+    dragPreviewRef.current = preview
+    setDragPreview(preview)
   }
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -226,13 +262,6 @@ function App() {
   const handleMouseMove = (e: React.MouseEvent) => {
     const rect = canvasRef.current!.getBoundingClientRect()
 
-    if (dragState) {
-      const x = e.clientX - rect.left - dragState.offsetX
-      const y = e.clientY - rect.top - dragState.offsetY
-      setDragPreview({ id: dragState.id, x, y })
-      return
-    }
-
     if (!isDrawing || tool !== 'pen') return
     const point = {
       x: e.clientX - rect.left,
@@ -242,18 +271,6 @@ function App() {
   }
 
   const handleMouseUp = (e: React.MouseEvent) => {
-    if (dragState) {
-      if (dragPreview?.id === dragState.id) {
-        setAnnotations(prev => prev.map(a => (a.id === dragState.id && a.type === 'text')
-          ? { ...a, x: dragPreview.x, y: dragPreview.y }
-          : a
-        ))
-      }
-      setDragState(null)
-      setDragPreview(null)
-      return
-    }
-
     if (!isDrawing || tool === 'select' || tool === 'text') return
 
     const rect = canvasRef.current!.getBoundingClientRect()
